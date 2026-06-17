@@ -1,0 +1,419 @@
+/* ============================================================================
+   Production Tracker — styling.
+   Recreates the original GitHub-dark look (dark default + light theme).
+   Dynamic bar / metric colours are injected from TS via the --c custom property;
+   gradients, glow and depth live here so the markup stays clean.
+   ============================================================================ */
+
+/* ---- dark palette (default) ---- */
+@bg:        #0d1117;
+@fg:        #c9d1d9;
+@hbg:       #161b22;
+@hfg:       #79c0ff;
+@alt:       #0a0d13;
+@grid:      #30363d;
+@accent:    #79c0ff;
+@purple:    #bc8cff;
+@track:     #21262d;
+@tgt:       #f0883e;
+@good:      #56d364;
+@mid:       #e3b341;
+@bad:       #ff7b72;
+
+.pt-root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: @bg;
+    color: @fg;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+    font-size: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+
+    * { box-sizing: border-box; }
+
+    /* custom scrollbars */
+    *::-webkit-scrollbar { width: 6px; height: 6px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, .3); border-radius: 8px; }
+    *::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, .55); }
+
+    .pt-empty {
+        display: flex; align-items: center; justify-content: center;
+        height: 100%; color: @hfg; font-size: 13px; padding: 16px; text-align: center;
+    }
+
+    /* ---- top bar ---- */
+    .pt-topbar {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 6px 10px; border-bottom: 1px solid @grid; background: @bg;
+        flex-shrink: 0;
+    }
+    .pt-title { font-size: 14px; font-weight: 700; color: @hfg; white-space: nowrap; }
+    .pt-filters { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; align-items: center; }
+    .pt-controls { display: flex; gap: 6px; align-items: center; }
+
+    .pt-select, .pt-date {
+        background: @hbg; color: @fg; border: 1px solid @grid; border-radius: 4px;
+        padding: 3px 6px; font-size: 11px; outline: none; cursor: pointer; max-width: 150px;
+    }
+    .pt-date { color-scheme: dark; }
+
+    .pt-btn {
+        background: @hbg; color: @fg; border: 1px solid @grid; border-radius: 4px;
+        padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
+        transition: background .18s, color .18s, transform .14s cubic-bezier(.34, 1.56, .64, 1),
+                    box-shadow .18s, border-color .18s;
+        will-change: transform;
+    }
+    .pt-btn:hover {
+        transform: translateY(-2px) scale(1.04); filter: brightness(1.15);
+        border-color: @accent; box-shadow: 0 0 0 1px rgba(121, 192, 255, .2), 0 4px 18px rgba(121, 192, 255, .18);
+    }
+    .pt-btn:active { transform: translateY(0) scale(.96); transition-duration: .07s; }
+    .pt-btn-active { background: @accent; color: @bg; border-color: @accent; }
+    .pt-btn-purple { background: @purple; color: @bg; border-color: @purple; }
+    .pt-btn-purple.pt-btn-active { background: @purple; color: @bg; }
+
+    /* ---- chart band ---- */
+    .pt-chart {
+        flex-shrink: 0; padding: 6px 10px 4px; border-bottom: 1px solid @grid;
+        display: flex; flex-direction: column; overflow: hidden;
+    }
+    .pt-chart-head {
+        display: flex; align-items: center; gap: 14px; margin-bottom: 4px; flex-wrap: wrap;
+    }
+    .pt-chart-title { font-size: 13px; font-weight: 700; color: @hfg; letter-spacing: .3px; }
+    .pt-legend { display: flex; gap: 12px; align-items: center; font-size: 10px; color: @fg; }
+    .pt-legend-item { display: flex; gap: 4px; align-items: center; }
+    .pt-legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+    .pt-legend-dash { width: 14px; height: 0; border-top: 2px dashed @tgt; }
+
+    .pt-chart-scroll {
+        flex: 1; overflow-x: auto; overflow-y: hidden;
+        display: flex; align-items: stretch; gap: 10px; padding: 0 2px 4px;
+    }
+    .pt-chart-group {
+        display: flex; flex-direction: column; flex-shrink: 0;
+        border-radius: 8px; padding: 4px 6px 2px;
+        background: linear-gradient(180deg, fade(@hbg, 50%), fade(@hbg, 15%));
+    }
+    .pt-group-label {
+        font-size: 10px; font-weight: 700; opacity: .85; text-transform: uppercase;
+        text-align: center; margin-bottom: 4px; color: @fg; letter-spacing: .4px;
+    }
+    .pt-group-bars { display: flex; align-items: flex-end; gap: 6px; flex: 1; }
+
+    .pt-bar-col {
+        display: flex; flex-direction: column; align-items: center;
+        flex-shrink: 0; cursor: pointer;
+        transition: transform .18s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .pt-bar-col:hover { transform: translateY(-2px) scale(1.06); }
+    .pt-bar-col:hover .pt-bar { filter: brightness(1.18); }
+
+    .pt-bar-value {
+        font-weight: 700; color: var(--c); text-align: center;
+        text-shadow: 0 0 6px fade(#000, 40%);
+    }
+    .pt-bar-plot {
+        position: relative; display: flex; align-items: flex-end; justify-content: center;
+    }
+    .pt-bar {
+        position: relative; border-radius: 4px 4px 0 0; min-height: 2px;
+        background-color: var(--c);
+        background-image: linear-gradient(180deg, rgba(255, 255, 255, .30), rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, .22));
+        box-shadow: 0 0 12px var(--c), inset 0 1px 0 rgba(255, 255, 255, .4);
+        transition: filter .2s ease, transform .18s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .pt-target-box {
+        position: absolute; bottom: 0; border: 1.5px dashed @tgt; border-bottom: none;
+        border-radius: 5px 5px 0 0; background: linear-gradient(180deg, fade(@tgt, 8%), transparent 70%);
+        pointer-events: none;
+    }
+    .pt-target-line {
+        position: absolute; left: 12%; right: 12%; height: 0;
+        border-top: 2px dashed @tgt; box-shadow: 0 0 4px @tgt; pointer-events: none;
+    }
+    .pt-bar-target { color: @tgt; font-weight: 600; text-align: center; }
+    .pt-bar-pct { color: var(--c); font-weight: 700; text-align: center; opacity: .95; }
+    .pt-bar-name {
+        color: @fg; font-weight: 600; text-align: center;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ---- main scrolling area ---- */
+    .pt-main { flex: 1; overflow: auto; }
+
+    /* ---- table view ---- */
+    .pt-table-wrap { overflow: auto; height: 100%; }
+    .pt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .pt-table th {
+        position: sticky; top: 0; background: @hbg; color: @hfg;
+        font-size: 12px; font-weight: 600; padding: 8px 10px;
+        border-bottom: 2px solid @grid; white-space: nowrap; text-align: right;
+    }
+    .pt-table th.pt-l, .pt-table td.pt-l { text-align: left; }
+    .pt-table td { padding: 7px 10px; text-align: right; font-weight: 600; border-bottom: 1px solid fade(@grid, 55%); }
+    .pt-table tbody tr { cursor: pointer; transition: filter .12s; }
+    .pt-table tbody tr:hover { filter: brightness(1.12); }
+    .pt-table tbody tr:nth-child(even) { background: @alt; }
+    .pt-table tr.pt-total td { background: @hbg; font-weight: 700; border-top: 2px solid @grid; border-bottom: none; }
+
+    .pt-dt-badge {
+        display: inline-block; border-radius: 4px; padding: 1px 6px; margin: 1px 2px;
+        font-size: 10px; font-weight: 600;
+    }
+
+    /* ---- tile view ---- */
+    .pt-tiles {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 10px; padding: 10px;
+    }
+    .pt-tile {
+        background: @hbg; border-radius: 6px; border-left: 3px solid @grid;
+        padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; cursor: pointer;
+        transition: transform .18s cubic-bezier(.34, 1.56, .64, 1), box-shadow .18s;
+    }
+    .pt-tile:hover {
+        transform: translateY(-4px) scale(1.02); z-index: 20;
+        box-shadow: 0 0 0 1px rgba(121, 192, 255, .22), 0 8px 28px rgba(121, 192, 255, .14), 0 2px 8px rgba(0, 0, 0, .4);
+    }
+    .pt-tile-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .pt-tile-name { font-size: 13px; font-weight: 700; color: @fg; }
+    .pt-tile-prod { font-size: 11px; color: @accent; font-weight: 600; }
+    .pt-tile-ct { font-size: 10px; color: @accent; opacity: .85; }
+    .pt-tile-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 10px; }
+    .pt-tile-kpi { display: flex; flex-direction: column; }
+    .pt-tile-kpi-label { font-size: 10px; color: @hfg; opacity: .85; }
+    .pt-tile-kpi-value { font-size: 14px; font-weight: 700; }
+    .pt-tile-foot { border-top: 1px solid @grid; padding-top: 5px; }
+
+    /* ---- OEE view ---- */
+    .pt-oee { padding: 10px; }
+    .pt-machine-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .pt-pill {
+        border-radius: 20px; padding: 3px 14px; font-size: 11px; cursor: pointer;
+        background: @hbg; color: @fg; border: 1px solid @grid; font-weight: 400;
+        transition: background .15s, transform .12s;
+    }
+    .pt-pill:hover { transform: translateY(-1px); }
+    .pt-pill-active { background: @accent; color: @bg; border-color: @accent; font-weight: 700; }
+
+    .pt-gauges { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .pt-gauge {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: @hbg; border-radius: 12px; padding: 14px 18px; min-width: 130px; flex: 1;
+    }
+    .pt-gauge-oee { border: 2px solid @purple; }
+    .pt-gauge-label { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .pt-gauge-formula { font-size: 10px; opacity: .65; margin-top: 6px; }
+
+    .pt-breakdown-title { font-size: 13px; font-weight: 700; color: @hfg; margin: 6px 0 10px; }
+    .pt-bd-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .pt-bd-name { min-width: 90px; text-align: right; font-size: 11px; font-weight: 600; }
+    .pt-bd-track { flex: 1; background: @track; border-radius: 4px; height: 18px; overflow: hidden; }
+    .pt-bd-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+    .pt-bd-pct { min-width: 42px; text-align: right; font-weight: 700; }
+    .pt-bd-formula { min-width: 130px; font-size: 10px; opacity: .7; }
+
+    /* ---- detail modal ---- */
+    .pt-overlay {
+        position: absolute; inset: 0; background: rgba(0, 0, 0, .6); z-index: 1000;
+        display: flex; align-items: center; justify-content: center; padding: 16px;
+        animation: ptOverlayIn .2s ease;
+    }
+    .pt-panel {
+        background: @bg; border: 2px solid @grid; border-radius: 12px;
+        padding: 20px 22px; width: 640px; max-width: 96%; max-height: 92%; overflow-y: auto;
+        position: relative;
+        box-shadow: 0 0 0 1px rgba(121, 192, 255, .15), 0 20px 60px rgba(0, 0, 0, .6), 0 0 40px rgba(121, 192, 255, .06);
+        animation: ptPopupIn .28s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .pt-panel-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+    .pt-panel-title { font-size: 18px; font-weight: 800; color: @fg; }
+    .pt-panel-sub { font-size: 13px; color: @accent; font-weight: 600; }
+    .pt-close {
+        position: absolute; top: 12px; right: 14px; background: @hbg; color: @fg;
+        border: 1px solid @grid; border-radius: 50%; width: 28px; height: 28px;
+        font-size: 14px; cursor: pointer; line-height: 1;
+    }
+    .pt-close:hover { border-color: @bad; color: @bad; }
+
+    .pt-kpis { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .pt-kpi { background: @hbg; border-radius: 8px; padding: 12px; text-align: center; }
+    .pt-kpi-label { font-size: 10px; opacity: .85; color: @hfg; }
+    .pt-kpi-value { font-size: 18px; font-weight: 800; margin-top: 3px; }
+
+    .pt-dt-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pt-dt-col-title { font-size: 11px; font-weight: 700; color: @hfg; margin-bottom: 6px; }
+    .pt-dt-empty { color: @hfg; opacity: .7; font-size: 11px; }
+    .pt-dt-row {
+        display: flex; justify-content: space-between; align-items: center; gap: 8px;
+        padding: 4px 8px; border-radius: 0 4px 4px 0; margin-bottom: 4px; font-size: 11px;
+    }
+    .pt-dt-min { font-weight: 700; }
+
+    /* ---- shift settings panel ---- */
+    .pt-cpanel {
+        display: flex; gap: 18px; flex-wrap: wrap; padding: 10px 12px;
+        border-bottom: 1px solid @grid; background: @hbg;
+    }
+    .pt-cg { display: flex; flex-direction: column; gap: 5px; min-width: 180px; }
+    .pt-cg-label { font-size: 11px; font-weight: 700; color: @hfg; }
+    .pt-cg-info { font-size: 10px; color: @fg; opacity: .8; }
+    .pt-select-wide { max-width: 230px; }
+    .pt-stop-grid { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
+    .pt-num-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .pt-num-label { font-size: 11px; color: @fg; }
+    .pt-num-input {
+        width: 64px; background: @bg; color: @fg; border: 1px solid @grid; border-radius: 4px;
+        padding: 2px 6px; font-size: 11px; text-align: right; outline: none;
+    }
+    .pt-num-input:focus { border-color: @accent; }
+    .pt-sum-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; }
+    .pt-sum-label { color: @fg; }
+    .pt-sum-value { font-weight: 700; }
+
+    /* ---- chart expand popup ---- */
+    .pt-chart-popup {
+        position: relative; background: @bg; border: 1px solid @grid; border-radius: 12px;
+        width: 96%; height: 92%; overflow: hidden; display: flex; flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+        animation: ptPopupIn .28s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .pt-chart-expanded { flex: 1; border-bottom: none; }
+    .pt-chart-expanded .pt-chart-scroll { align-items: center; }
+
+    /* ---- report modal (full-screen, scrollable body) ---- */
+    .pt-report {
+        width: 94%; max-width: 1100px; height: 94%; max-height: 94%;
+        padding: 0; overflow: hidden; display: flex; flex-direction: column;
+    }
+    .pt-report-body { flex: 1; overflow-y: auto; }
+    .pt-report-header {
+        position: relative; padding: 26px 28px 22px; overflow: hidden; flex-shrink: 0;
+        background: linear-gradient(135deg, @purple, fade(@purple, 80%));
+    }
+    .pt-report-close {
+        position: absolute; top: 18px; right: 18px; background: rgba(255, 255, 255, .18);
+        color: #fff; border: none; border-radius: 8px; width: 32px; height: 32px;
+        font-size: 16px; cursor: pointer;
+    }
+    .pt-report-close:hover { background: rgba(255, 255, 255, .3); }
+    .pt-report-sub {
+        font-size: 10px; font-weight: 700; color: rgba(255, 255, 255, .6);
+        text-transform: uppercase; letter-spacing: 2.5px; margin-bottom: 6px;
+    }
+    .pt-report-title { font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 6px; }
+    .pt-report-meta { font-size: 12px; color: rgba(255, 255, 255, .65); }
+
+    .pt-report-status {
+        display: flex; align-items: center; gap: 12px; margin: 18px;
+        padding: 14px 18px; background: @hbg; border-left: 4px solid @grid; border-radius: 0 10px 10px 0;
+    }
+    .pt-report-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .pt-report-status-mid { flex: 1; }
+    .pt-report-status-label { font-size: 13px; font-weight: 700; color: @fg; }
+    .pt-report-status-sub { font-size: 11px; color: @hfg; margin-top: 2px; }
+    .pt-report-status-pct { font-size: 24px; font-weight: 800; }
+
+    .pt-report-kpis {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 14px; margin: 0 18px 18px;
+    }
+    .pt-report-kpi {
+        position: relative; background: @hbg; border: 1px solid @grid; border-radius: 12px;
+        padding: 18px 16px 14px; overflow: hidden;
+    }
+    .pt-report-kpi-bar { position: absolute; top: 0; left: 0; right: 0; height: 3px; background: fade(@grid, 60%); }
+    .pt-report-kpi-fill { height: 100%; border-radius: 0 3px 3px 0; }
+    .pt-report-kpi-label {
+        font-size: 10px; font-weight: 700; color: @hfg; text-transform: uppercase;
+        letter-spacing: .8px; margin-bottom: 8px;
+    }
+    .pt-report-kpi-value { font-size: 26px; font-weight: 800; color: @fg; line-height: 1; margin-bottom: 6px; }
+    .pt-report-kpi-sub { font-size: 11px; color: @hfg; }
+
+    .pt-report-table-card {
+        background: @hbg; border: 1px solid @grid; border-radius: 12px;
+        overflow: hidden; margin: 0 18px 18px;
+    }
+    .pt-report-table-head { padding: 16px 18px 12px; border-bottom: 1px solid @grid; }
+    .pt-report-table-title { font-size: 14px; font-weight: 700; color: @fg; }
+}
+
+@keyframes ptOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ptPopupIn {
+    from { opacity: 0; transform: scale(.88) translateY(16px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ============================================================================
+   Light theme overrides
+   ============================================================================ */
+.pt-root.pt-light {
+    @lbg:    #f6f8fa;
+    @lfg:    #1f2328;
+    @lhbg:   #eaeef2;
+    @lhfg:   #2f81f7;
+    @lalt:   #f0f3f6;
+    @lgrid:  #c9d1d9;
+    @laccent:#2f81f7;
+    @lpurple:#6e40c9;
+    @ltrack: #c9d1d9;
+    @ltgt:   #bc4c00;
+
+    background: @lbg; color: @lfg;
+
+    .pt-topbar { background: @lbg; border-bottom-color: @lgrid; }
+    .pt-title, .pt-chart-title, .pt-breakdown-title, .pt-panel-sub, .pt-tile-prod { color: @lhfg; }
+    .pt-tile-ct { color: @lhfg; }
+    .pt-select, .pt-date, .pt-btn { background: #fff; color: @lfg; border-color: @lgrid; }
+    .pt-date { color-scheme: light; }
+    .pt-btn:hover { border-color: @laccent; box-shadow: 0 4px 14px rgba(0, 0, 0, .22); }
+    .pt-btn-active { background: @laccent; color: #fff; border-color: @laccent; }
+    .pt-btn-purple, .pt-btn-purple.pt-btn-active { background: @lpurple; color: #fff; border-color: @lpurple; }
+
+    .pt-chart { border-bottom-color: @lgrid; }
+    .pt-chart-group { background: linear-gradient(180deg, fade(@lhbg, 80%), fade(@lhbg, 40%)); }
+    .pt-group-label, .pt-bar-name { color: @lfg; }
+    .pt-target-box { border-color: @ltgt; background: linear-gradient(180deg, fade(@ltgt, 8%), transparent 70%); }
+    .pt-target-line, .pt-legend-dash { border-top-color: @ltgt; }
+    .pt-bar-target { color: @ltgt; }
+
+    .pt-table th { background: @lhbg; color: @lhfg; border-bottom-color: @lgrid; }
+    .pt-table td { border-bottom-color: fade(@lgrid, 60%); }
+    .pt-table tbody tr:nth-child(even) { background: @lalt; }
+    .pt-table tr.pt-total td { background: @lhbg; border-top-color: @lgrid; }
+
+    .pt-tile { background: @lhbg; border-left-color: @lgrid; }
+    .pt-tile:hover { box-shadow: 0 10px 28px rgba(0, 0, 0, .2); }
+    .pt-tile-name { color: @lfg; }
+    .pt-tile-kpi-label, .pt-kpi-label, .pt-dt-col-title, .pt-dt-empty { color: @lhfg; }
+    .pt-tile-foot { border-top-color: @lgrid; }
+
+    .pt-pill { background: @lhbg; color: @lfg; border-color: @lgrid; }
+    .pt-pill-active { background: @laccent; color: #fff; border-color: @laccent; }
+    .pt-gauge, .pt-kpi { background: @lhbg; }
+    .pt-gauge-oee { border-color: @lpurple; }
+    .pt-bd-track { background: @ltrack; }
+
+    .pt-panel { background: @lbg; border-color: @lgrid; box-shadow: 0 20px 60px rgba(0, 0, 0, .22); }
+    .pt-panel-title { color: @lfg; }
+    .pt-close { background: @lhbg; color: @lfg; border-color: @lgrid; }
+
+    .pt-cpanel { background: @lhbg; border-bottom-color: @lgrid; }
+    .pt-cg-label { color: @lhfg; }
+    .pt-num-label, .pt-sum-label { color: @lfg; }
+    .pt-num-input { background: #fff; color: @lfg; border-color: @lgrid; }
+    .pt-chart-popup { background: @lbg; border-color: @lgrid; }
+
+    .pt-report-header { background: linear-gradient(135deg, @lpurple, fade(@lpurple, 80%)); }
+    .pt-report-status, .pt-report-kpi, .pt-report-table-card { background: @lhbg; border-color: @lgrid; }
+    .pt-report-status-label, .pt-report-table-title { color: @lfg; }
+    .pt-report-status-sub, .pt-report-kpi-label, .pt-report-kpi-sub { color: @lhfg; }
+    .pt-report-kpi-value { color: @lfg; }
+}

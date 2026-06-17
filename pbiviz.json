@@ -1,0 +1,26 @@
+{
+  "visual": {
+    "name": "productionPlanVisual",
+    "displayName": "Production Tracker",
+    "guid": "productionPlanVisual04E2E64F925244DD8164EEEB75DB7EA1",
+    "visualClassName": "Visual",
+    "version": "5.3.12.0",
+    "description": "v5.3.12 - License check fix: match Partner Center generated Service ID (publisher.offer.planId) and numeric ServicePlanState enum (Active/Warning).",
+    "supportUrl": "https://productionvisual.com/support.html",
+    "gitHubUrl": "https://productionvisual.com"
+  },
+  "apiVersion": "5.10.0",
+  "author": {
+    "name": "Production Visual",
+    "email": "info@productionvisual.com"
+  },
+  "assets": {
+    "icon": "assets/icon.png"
+  },
+  "externalJS": null,
+  "style": "style/visual.less",
+  "capabilities": "capabilities.json",
+  "dependencies": null,
+  "stringResources": [],
+  "version": "5.3.12.0"
+}
