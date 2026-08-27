@@ -64,6 +64,10 @@ export interface ProcessedData {
     hasData: boolean;
     shiftCount: number;       // shifts in the period (from the schedule)
     factoryOpenTime: number;  // shiftCount × (shiftLength − plannedStop)
+    // v5.4.0 free tier: machines beyond the cap are dropped before any metric is
+    // computed, so the chart, table and totals all agree on the same machine set.
+    machinesHidden: number;   // how many machines the cap removed (0 when licensed)
+    machinesTotal: number;    // machines present in the data, before the cap
 }
 
 export const EMPTY_FILTER: FilterState =
@@ -107,12 +111,13 @@ export function transform(
     settings: TrackerSettingsModel,
     host: IVisualHost,
     filter: FilterState,
-    schedule?: ScheduleParams
+    schedule?: ScheduleParams,
+    maxMachines?: number
 ): ProcessedData {
     const empty: ProcessedData = {
         machines: [], areas: [], totals: blankTotals(),
         filters: { shifts: [], lines: [], locations: [], products: [], categories: [] }, hasData: false,
-        shiftCount: 0, factoryOpenTime: 0
+        shiftCount: 0, factoryOpenTime: 0, machinesHidden: 0, machinesTotal: 0
     };
     const categorical = dataView && dataView.categorical;
     if (!categorical || !categorical.categories || !categorical.categories.length) { return empty; }
@@ -221,7 +226,15 @@ export function transform(
     const shiftCount = computeShiftCount([...dateSet], sched, !!filter.shift);
     const factoryOpenTime = shiftCount * productive;
 
-    const machines: MachineMetrics[] = order.map(name => finalize(machineMap.get(name), factoryOpenTime, host, machineColumn));
+    // v5.4.0: apply the free-tier machine cap before finalizing, so totals and
+    // OEE averages reflect exactly the machines the user can actually see.
+    const machinesTotal = order.length;
+    const capped = typeof maxMachines === "number" && maxMachines >= 0 && machinesTotal > maxMachines
+        ? order.slice(0, maxMachines)
+        : order;
+    const machinesHidden = machinesTotal - capped.length;
+
+    const machines: MachineMetrics[] = capped.map(name => finalize(machineMap.get(name), factoryOpenTime, host, machineColumn));
 
     // group by area (sorted by areaSort then name)
     const areaMap = new Map<string, AreaGroup>();
@@ -240,7 +253,7 @@ export function transform(
             products: [...products].sort(), categories: [...categories].sort()
         },
         hasData: machines.length > 0,
-        shiftCount, factoryOpenTime
+        shiftCount, factoryOpenTime, machinesHidden, machinesTotal
     };
 }
 

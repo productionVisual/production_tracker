@@ -23,11 +23,12 @@ import {
     transform, ProcessedData, FilterState, EMPTY_FILTER, fillColor, gaugeColor,
     MachineMetrics, DowntimeEntry
 } from "./dataModel";
-import { t, Language } from "./i18n";
+import { t, tf, Language } from "./i18n";
 import {
     SHIFT_TEMPLATES, PLANNED_STOPS, ShiftConfig, templateLabel, stopLabel,
     effectiveShiftMinutes, plannedStopTotal, scheduleParamsFor
 } from "./shiftConfig";
+import { LicenseGate, APPSOURCE_OFFER_URL } from "./license";
 import { ScheduleParams } from "./dataModel";
 
 type ViewMode = "table" | "tile" | "oee";
@@ -35,18 +36,21 @@ const PLOT_H = 132;   // bar plot height in px
 const BAR_W = 26;     // bar width in px
 const CARD_W = 54;    // bar column width in px
 
-// v5.3.7: AppSource license manager — strict model (Desktop + Service).
-// Edit mode without an active license = editor UI locked + trial banner.
-// View mode = always rendered, no license check.
-const VALID_PLAN_IDS = [
-    "tracker_trial",
-    "tracker_monthly",
-    "tracker_annual",
-    "tracker_tenant_annual",
-    "tracker_reference_partner"
-];
-const APPSOURCE_OFFER_URL =
-    "https://appsource.microsoft.com/product/power-bi-visuals/productionvisual.production-tracker?tab=Overview";
+// v5.4.0: freemium model, replacing the v5.3.7 all-or-nothing gate.
+//
+// Free, in Desktop and Service alike:
+//   - binding data, all filters, the chart, the Table view
+//   - the ⚙ shift settings (they drive Open Time / target / OEE, so a trial
+//     that couldn't set them would produce meaningless numbers)
+//   - up to FREE_MACHINE_LIMIT machines
+//
+// Licensed:
+//   - the Tiles and OEE views, and the Daily Report
+//   - machines beyond the cap
+//
+// Locked views still appear in the tab bar and open a page describing what the
+// view does, so prospects can see what they'd get instead of guessing.
+const FREE_MACHINE_LIMIT = 20;
 
 export class Visual implements IVisual {
     private readonly host: IVisualHost;
@@ -64,11 +68,7 @@ export class Visual implements IVisual {
     private collapsed = false;
     private showControls = false;
     private isEditMode = false;  // v5.3.6: only editors (Power BI Edit mode) see the shift-settings panel
-    // v5.3.7: license state. licenseChecked stays false until the async API resolves
-    // so we don't show a "not licensed" banner during the first paint.
-    private hasValidLicense = false;
-    private licenseChecked = false;
-    private licensePromise: Promise<void> | undefined;
+    private license: LicenseGate;
     private view: ViewMode = "table";
     private oeeMachine = "";   // "" = all machines
     private shiftConfig: ShiftConfig | undefined;
@@ -80,6 +80,13 @@ export class Visual implements IVisual {
         this.tooltipService = this.host.tooltipService;
         this.events = this.host.eventService;
         this.formattingService = new FormattingSettingsService();
+        this.license = new LicenseGate(this.host, () => {
+            // The plan lookup resolved after the first paint. Re-run the
+            // transform, not just render(): the machine cap is applied during
+            // transform, so a licensed user would otherwise keep looking at the
+            // capped 20-machine dataset until the next update.
+            if (this.lastOptions) { this.refilter(); }
+        });
         this.root.classList.add("pt-root");
         // v5.3.10: visual-level right-click context menu fallback (AppSource cert 1180.2.5).
         // Machine-level handlers in wireInteractions() also show a per-machine menu via
@@ -99,13 +106,16 @@ export class Visual implements IVisual {
             // v5.3.6: viewMode 1 = Edit, 2 = InFocusEdit, 0 = View (consumer).
             // Only editors get to open the shift-settings panel and change values.
             this.isEditMode = !!(options && (options.viewMode === 1 || options.viewMode === 2));
-            this.startLicenseCheck();
             const dataView = options.dataViews && options.dataViews[0];
+            this.license.syncStamp(dataView);
+            this.license.start();
+            this.license.reconcileStamp(this.isEditMode);
             this.settings = this.formattingService.populateFormattingSettingsModel(TrackerSettingsModel, dataView);
             this.syncShiftConfig(dataView);
             this.applyConfigToSettings();
             this.lastOptions = options;
-            this.data = transform(dataView, this.settings, this.host, this.filter, this.scheduleParams());
+            this.data = transform(dataView, this.settings, this.host, this.filter,
+                this.scheduleParams(), this.machineLimit());
             this.render();
             this.events.renderingFinished(options);
         } catch (error) {
@@ -123,68 +133,48 @@ export class Visual implements IVisual {
     private refilter(): void {
         if (!this.lastOptions) { return; }
         const dataView = this.lastOptions.dataViews && this.lastOptions.dataViews[0];
-        this.data = transform(dataView, this.settings, this.host, this.filter, this.scheduleParams());
+        this.data = transform(dataView, this.settings, this.host, this.filter,
+            this.scheduleParams(), this.machineLimit());
         this.render();
     }
 
+    /** Machine cap for the current entitlement — undefined means "no cap". */
+    private machineLimit(): number | undefined {
+        return this.license.unlocked ? undefined : FREE_MACHINE_LIMIT;
+    }
+
+    /** Tiles, OEE and the Daily Report are the paid views. */
+    private isViewLocked(view: ViewMode): boolean {
+        if (this.license.unlocked) { return false; }
+        return view === "tile" || view === "oee";
+    }
+
     private scheduleParams(): ScheduleParams | undefined {
-        // v5.3.9: In Edit mode without an active license, ignore any saved
-        // custom shift config and fall back to defaults. The saved config
-        // stays in persistProperties (not wiped) — it just isn't APPLIED
-        // until the editor re-licenses. Closes the "trial -> configure ->
-        // expire -> free forever" loophole. View mode (viewers) always
-        // sees whatever was published, preserving the viewer-free model.
-        if (this.isEditMode && !this.hasValidLicense) {
-            return undefined;
-        }
+        // v5.4.0: the shift schedule is free. It feeds Open Time, the daily
+        // target and every OEE figure, so gating it made the free tier produce
+        // numbers that looked wrong rather than limited. The v5.3.9 "ignore the
+        // saved config when unlicensed" rule is gone with it.
         return this.shiftConfig ? scheduleParamsFor(this.shiftConfig) : undefined;
     }
 
-    // v5.3.7: AppSource license check. Runs once per session; result cached for
-    // the lifetime of the visual. Failures default to "no license" (strict).
-    private startLicenseCheck(): void {
-        if (this.licensePromise) { return; }
-        // tslint:disable-next-line:no-any
-        const lm: any = this.host && (this.host as any).licenseManager;
-        if (!lm || typeof lm.getAvailableServicePlans !== "function") {
-            this.licenseChecked = true;
-            this.hasValidLicense = false;
-            return;
-        }
-        this.licensePromise = Promise.resolve(lm.getAvailableServicePlans()).then(
-            // tslint:disable-next-line:no-any
-            (result: any) => {
-                const plans = (result && result.plans) || [];
-                this.hasValidLicense = plans.some(
-                    // tslint:disable-next-line:no-any
-                    (p: any) => {
-                        if (!p) { return false; }
-                        // state is a numeric enum at runtime (Active=1, Warning=2) — both are usable licenses.
-                        const stateOk = p.state === 1 || p.state === 2 || p.state === "Active" || p.state === "Warning";
-                        // spIdentifier is the Partner Center GENERATED Service ID
-                        // (e.g. "<publisher>.<offer>.<planId>"), not the bare plan ID — match on the planId part.
-                        const sp = String(p.spIdentifier || "");
-                        return stateOk && VALID_PLAN_IDS.some((id) => sp.indexOf(id) >= 0);
-                    }
-                );
-                this.licenseChecked = true;
-                if (this.lastOptions) { this.render(); }
-            },
-            () => {
-                this.hasValidLicense = false;
-                this.licenseChecked = true;
-                if (this.lastOptions) { this.render(); }
-            }
-        );
+    /** AppSource link. Omitted where the user can't act on it (embed / export). */
+    private upgradeLink(label: string, accent: boolean): HTMLElement | undefined {
+        if (!this.license.canPurchase) { return undefined; }
+        const link = document.createElement("a");
+        link.href = APPSOURCE_OFFER_URL;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = label;
+        link.style.cssText = accent
+            ? "flex-shrink:0;padding:6px 14px;background:#ffb84d;color:#1a1408;"
+            + "border-radius:4px;text-decoration:none;font-weight:600;"
+            : "flex-shrink:0;padding:8px 18px;background:#bc8cff;color:#12101a;"
+            + "border-radius:6px;text-decoration:none;font-weight:600;font-size:13px;";
+        return link;
     }
 
-    /** Editors can change settings only if they have an active license. */
-    private canEdit(): boolean {
-        return this.isEditMode && this.hasValidLicense;
-    }
-
-    /** Banner shown in Edit mode when no active license is found. */
-    private buildLicenseBanner(lang: Language): HTMLElement {
+    /** Amber strip shown to unlicensed editors: what's free, what isn't. */
+    private buildFreeTierBanner(lang: Language): HTMLElement {
         const banner = el("div", "pt-license-banner");
         banner.style.cssText =
             "display:flex;align-items:center;gap:12px;padding:10px 14px;" +
@@ -192,26 +182,78 @@ export class Visual implements IVisual {
             "border:1px solid #6b4a1a;border-radius:6px;margin:8px;color:#ffd87a;font-size:13px;";
         const icon = el("span");
         icon.style.cssText = "font-size:18px;flex-shrink:0;";
-        icon.textContent = "🔒";
+        icon.textContent = "✨";
         banner.appendChild(icon);
         const text = el("span");
         text.style.cssText = "flex:1;";
         const strong = el("strong");
         strong.style.cssText = "color:#ffe9a8;margin-right:6px;";
-        strong.textContent = t(lang, "licenseRequired") + ".";
+        strong.textContent = t(lang, "freeTier") + ".";
         text.appendChild(strong);
-        text.appendChild(document.createTextNode(" " + t(lang, "licenseDescription")));
+        text.appendChild(document.createTextNode(
+            " " + tf(lang, "licenseDescription", { n: FREE_MACHINE_LIMIT })));
         banner.appendChild(text);
-        const link = document.createElement("a");
-        link.href = APPSOURCE_OFFER_URL;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = t(lang, "startTrial");
-        link.style.cssText =
-            "flex-shrink:0;padding:6px 14px;background:#ffb84d;color:#1a1408;" +
-            "border-radius:4px;text-decoration:none;font-weight:600;";
-        banner.appendChild(link);
+        const link = this.upgradeLink(t(lang, "startTrial"), true);
+        if (link) { banner.appendChild(link); }
         return banner;
+    }
+
+    /** Shown whenever the cap actually dropped machines from the data. */
+    private buildMachineCapBanner(data: ProcessedData, lang: Language): HTMLElement {
+        const banner = el("div", "pt-cap-banner");
+        banner.style.cssText =
+            "display:flex;align-items:center;gap:12px;padding:9px 14px;" +
+            "background:#1b1726;border:1px solid #43356b;border-radius:6px;" +
+            "margin:0 8px 8px;color:#d8c9ff;font-size:12.5px;";
+        const icon = el("span");
+        icon.style.cssText = "font-size:16px;flex-shrink:0;";
+        icon.textContent = "🔒";
+        banner.appendChild(icon);
+        const text = el("span");
+        text.style.cssText = "flex:1;";
+        const strong = el("strong");
+        strong.style.cssText = "color:#e9dcff;margin-right:6px;";
+        strong.textContent = t(lang, "machineCapTitle") + ".";
+        text.appendChild(strong);
+        text.appendChild(document.createTextNode(" " + tf(lang, "machineCapBody",
+            { n: FREE_MACHINE_LIMIT, r: data.machinesHidden })));
+        banner.appendChild(text);
+        const link = this.upgradeLink(t(lang, "viewLicense"), true);
+        if (link) { banner.appendChild(link); }
+        return banner;
+    }
+
+    /**
+     * Stand-in for a paid view. The tab stays clickable on purpose — a prospect
+     * should be able to read what the view does before deciding to buy.
+     */
+    private buildLockedPage(lang: Language, bodyKey: "lockedTilesBody" | "lockedOeeBody" | "lockedReportBody"): HTMLElement {
+        const page = el("div", "pt-locked");
+        page.style.cssText =
+            "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+            "text-align:center;gap:10px;padding:48px 32px;min-height:220px;";
+        const icon = el("div");
+        icon.style.cssText = "font-size:34px;line-height:1;opacity:0.9;";
+        icon.textContent = "🔒";
+        page.appendChild(icon);
+        const title = el("div");
+        title.style.cssText = "font-size:16px;font-weight:600;color:#e6edf3;";
+        title.textContent = t(lang, "lockedViewTitle");
+        page.appendChild(title);
+        const body = el("div");
+        body.style.cssText = "font-size:13px;line-height:1.6;color:#9aa7b4;max-width:460px;";
+        body.textContent = t(lang, bodyKey);
+        page.appendChild(body);
+        const note = el("div");
+        note.style.cssText = "font-size:12px;color:#7d8896;margin-top:2px;";
+        note.textContent = t(lang, "lockedIncluded");
+        page.appendChild(note);
+        const link = this.upgradeLink(t(lang, "startTrial"), false);
+        if (link) {
+            link.style.marginTop = "8px";
+            page.appendChild(link);
+        }
+        return page;
     }
 
     private render(): void {
@@ -226,17 +268,25 @@ export class Visual implements IVisual {
             return;
         }
         this.root.appendChild(this.buildTopbar(data, lang));
-        if (this.isEditMode && this.licenseChecked && !this.hasValidLicense) {
-            this.root.appendChild(this.buildLicenseBanner(lang));
+        // Only editors get the upsell strip; viewers of a free-tier report just
+        // see the free-tier product, without being sold to.
+        if (this.isEditMode && this.license.isChecked && !this.license.unlocked) {
+            this.root.appendChild(this.buildFreeTierBanner(lang));
         }
-        if (this.canEdit() && this.showControls) {
+        if (data.machinesHidden > 0) {
+            this.root.appendChild(this.buildMachineCapBanner(data, lang));
+        }
+        if (this.isEditMode && this.showControls) {
             this.root.appendChild(this.buildControls(data, lang));
         }
         if (!this.collapsed) {
             this.root.appendChild(this.buildChart(data, lang, 1, false));
         }
         const main = el("div", "pt-main");
-        if (this.view === "table") { main.appendChild(this.buildTable(data, lang)); }
+        if (this.isViewLocked(this.view)) {
+            main.appendChild(this.buildLockedPage(lang,
+                this.view === "tile" ? "lockedTilesBody" : "lockedOeeBody"));
+        } else if (this.view === "table") { main.appendChild(this.buildTable(data, lang)); }
         else if (this.view === "tile") { main.appendChild(this.buildTiles(data, lang)); }
         else { main.appendChild(this.buildOee(data, lang)); }
         this.root.appendChild(main);
@@ -274,22 +324,32 @@ export class Visual implements IVisual {
         bar.appendChild(filters);
 
         const controls = el("div", "pt-controls");
-        const tab = (label: string, mode: ViewMode) =>
-            this.button(label, this.view === mode, () => { this.view = mode; this.render(); });
+        // v5.4.0: locked views keep their tab and are still clickable — they open
+        // a page explaining the view. A padlock marks them so nobody mistakes the
+        // placeholder for a bug or for empty data.
+        const tab = (label: string, mode: ViewMode) => {
+            const locked = this.isViewLocked(mode);
+            const button = this.button(locked ? label + " 🔒" : label, this.view === mode,
+                () => { this.view = mode; this.render(); });
+            if (locked) { button.title = t(lang, "lockedViewTitle"); }
+            return button;
+        };
         controls.appendChild(tab(t(lang, "tableView"), "table"));
         controls.appendChild(tab(t(lang, "tileView"), "tile"));
-        const oeeTab = this.button(t(lang, "oeeView"), this.view === "oee",
-            () => { this.view = "oee"; this.render(); });
+        const oeeTab = tab(t(lang, "oeeView"), "oee");
         oeeTab.classList.add("pt-btn-purple");
         controls.appendChild(oeeTab);
 
-        const reportButton = this.button(t(lang, "report"), false, () => this.showReport(data, lang));
+        const reportLocked = !this.license.unlocked;
+        const reportButton = this.button(reportLocked ? t(lang, "report") + " 🔒" : t(lang, "report"), false,
+            () => this.showReport(data, lang));
         reportButton.classList.add("pt-btn-purple");
+        if (reportLocked) { reportButton.title = t(lang, "lockedViewTitle"); }
         controls.appendChild(reportButton);
 
-        // v5.3.7: Settings button only for licensed editors. Viewers and
-        // unlicensed editors see everything else but can't change settings.
-        if (this.canEdit()) {
+        // v5.4.0: shift settings are part of the free tier — every editor gets
+        // them, licensed or not. Viewers still don't (it's an authoring tool).
+        if (this.isEditMode) {
             controls.appendChild(this.button(t(lang, "settings"), this.showControls, () => {
                 this.showControls = !this.showControls; this.render();
             }));
@@ -938,6 +998,19 @@ export class Visual implements IVisual {
         const overlay = el("div", "pt-overlay");
         overlay.addEventListener("click", (ev) => { if (ev.target === overlay) { overlay.remove(); } });
         const panel = el("div", "pt-panel pt-report");
+
+        // v5.4.0: the Daily Report is a paid view. The modal still opens so the
+        // reader learns what it contains, but no figures are rendered.
+        if (!this.license.unlocked) {
+            const close = el("button", "pt-report-close");
+            close.setAttribute("type", "button"); close.textContent = "✕";
+            close.addEventListener("click", () => overlay.remove());
+            panel.appendChild(close);
+            panel.appendChild(this.buildLockedPage(lang, "lockedReportBody"));
+            overlay.appendChild(panel);
+            this.root.appendChild(overlay);
+            return;
+        }
 
         const machines = data.machines;
         const tot = data.totals;
